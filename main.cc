@@ -127,7 +127,13 @@ void ChatDialog::gotReturnPressed()
 	qDebug() << "FIX: send message to other peers: " << message;
 	textview->append(textline->text());
 	//TODO: Add sent message to our own list of messages
-	
+	if(statusMessage.contains(sock->randomID)) {
+        	statusMessage[sock->randomID] += 1;
+    	}
+    	else {
+        	statusMessage.insert(sock->randomID, 1);
+	}
+
 	sendMessage(message);
 	// Clear the textline to get ready for the next input message.
 	textline->clear();

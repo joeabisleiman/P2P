@@ -35,8 +35,9 @@ public:
 	void deserializeMessage(QByteArray);
 	quint32 seqNo;
 	NetSocket *sock;
-	QMap<QString, quint32> currentStatus;
-	QMap<QString, QMap<QString, quint32> > networkStatus;
+	QMap<QString, quint32> statusMessage;
+	QMap<QString, QMap<QString, quint32> > networkStatusMessage; //superfluous 
+	QMap<QString, QMap<quint32, QString> > sentMessages;
 	
 
 public slots:
