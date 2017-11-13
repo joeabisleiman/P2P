@@ -32,29 +32,33 @@ public:
 	ChatDialog();
 	void sendMessage(QString);
 	QByteArray serializeMessage(QString);
-	void deserializeMessage(QByteArray);
+    void deserializeMessage(QByteArray input, quint16 senderPort);
 	quint32 seqNo;
 	NetSocket *sock;
     QMap<QString, quint32> statusMessage;
     //QMap<QString, QMap<QString, quint32> > networkStatusMessage; //superfluous
-	QList<QString> currentMessageList;
+    //QList<QString> currentMessageList;
 	QMap<QString, QList<QString> > allMessages;
-    void handleReceivedMessage(QVariantMap map);
+    void handleReceivedMessage(QVariantMap map, quint16 senderPort);
     QTimer * entropyTimer;
     void sendStatusMessage(int);
     QByteArray serializeStatusMessage();
     int receiverPort;
     int choosePeer();
     int peer;
-    void handleReceivedStatusMessage(QVariantMap map);
+    void handleReceivedStatusMessage(QMap<QString, QMap<QString, quint32> > _map, quint16 senderPort);
     QTimer * timeout;
+    QByteArray lastAttemptedMessage;
+    int lastAttemptedPeer;
+    QByteArray serializeMissingMessage(QString input, quint32 seqNumber, QString origin);
+
 	
 
 public slots:
 	void gotReturnPressed();
 	void readMessage();
     void anti_entropy();
-    void rumorMonger();
+    void reSendMessage();
 
 private:
 	QTextEdit *textview;

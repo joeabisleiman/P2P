@@ -45,7 +45,7 @@ ChatDialog::ChatDialog()
 	sock = new NetSocket();
 	if (!sock->bind())
 		exit(1);
-	setWindowTitle(QString::number(sock->assignedPort % sock->myPortMin + 1));
+    setWindowTitle("P2PApp: Peer" + QString::number(sock->assignedPort % sock->myPortMin + 1));
 
 	connect(sock, SIGNAL(readyRead()),
 		this, SLOT(readMessage()));
@@ -53,11 +53,11 @@ ChatDialog::ChatDialog()
     entropyTimer = new QTimer(this);
     connect(entropyTimer, SIGNAL(timeout()),
         this, SLOT(anti_entropy()));
-    entropyTimer->start(10000);
+    entropyTimer->start(5000);
 
     timeout = new QTimer(this);
     connect(timeout, SIGNAL(timeout()),
-        this, SLOT(rumorMonger()));
+        this, SLOT(reSendMessage()));
 }
 
 int ChatDialog::choosePeer(){
@@ -78,14 +78,15 @@ int ChatDialog::choosePeer(){
         peer = sock->assignedPort+1;
         }
     }
-    return 0;
+    return peer;
 }
 
-void ChatDialog::rumorMonger()
+void ChatDialog::reSendMessage()
 {
-    //FLIP COIN to EITHER choose new PEER and RUMORMONGER or QUIT
-    peer = choosePeer();
-    sendStatusMessage(peer);
+    sock->writeDatagram(lastAttemptedMessage, lastAttemptedMessage.size(), QHostAddress::LocalHost, lastAttemptedPeer);
+
+    //TODO: ADD TIMEOUT
+    qDebug() <<  "ARE YOU RESENDING YOU FUCKER????";
     timeout->start(2000);
 }
 
@@ -94,14 +95,14 @@ void ChatDialog::anti_entropy()
     qDebug() << "Entropy timer fired up.";
     receiverPort = choosePeer(); //TO SIMULATE RANDOM PEER CHOICE
     sendStatusMessage(receiverPort);
-    entropyTimer->start(10000);
+    entropyTimer->start(5000);
 }
 
 void ChatDialog::sendStatusMessage(int rPort)
 {
     QByteArray statusMessage = serializeStatusMessage();
     qDebug() <<  "INFO: Trying to send status message.";
-    sock->writeDatagram(statusMessage, statusMessage.size(), QHostAddress::LocalHost, receiverPort);
+    sock->writeDatagram(statusMessage, statusMessage.size(), QHostAddress::LocalHost, rPort);
 }
 
 QByteArray ChatDialog::serializeStatusMessage()
@@ -119,26 +120,9 @@ void ChatDialog::sendMessage(QString input)
 {
 	QByteArray message = serializeMessage(input);
 	qDebug() <<  "INFO: Trying to send message.";
-
-/*	if(sock->assignedPort == sock->myPortMin) {
-		sock->writeDatagram(message, message.size(), QHostAddress::LocalHost, sock->myPortMin+1);
-	}
-
-	else if(sock->assignedPort == sock->myPortMax) {
-		sock->writeDatagram(message, message.size(), QHostAddress::LocalHost, sock->myPortMax-1);
-	}
-
-	else { 
-		qsrand(time(0));
-		if(1+(rand() %2) == 1) {
-			sock->writeDatagram(message, message.size(), QHostAddress::LocalHost, sock->assignedPort-1);
-		}
-		else {
-		sock->writeDatagram(message, message.size(), QHostAddress::LocalHost, sock->assignedPort+1);
-		}
-    }
-*/
+    lastAttemptedMessage = message;
     peer = choosePeer();
+    lastAttemptedPeer = peer;
     sock->writeDatagram(message, message.size(), QHostAddress::LocalHost, peer);
 
     //TODO: ADD TIMEOUT
@@ -173,52 +157,139 @@ void ChatDialog::readMessage()
 
         sock->readDatagram(message.data(), message.size(),
                          &sender, &senderPort);
-        deserializeMessage(message);
+        deserializeMessage(message, senderPort);
 
     //}
 }
 
-void ChatDialog::deserializeMessage(QByteArray input)
+void ChatDialog::deserializeMessage(QByteArray input, quint16 senderPort)
 {
-	QVariantMap map;
+    QVariantMap map;
 	QDataStream deserializer(&input, QIODevice::ReadOnly);
     deserializer >> map;
 
     if (map.contains("ChatText")){
-        handleReceivedMessage(map);
+        handleReceivedMessage(map, senderPort);
     }
     else if(map.contains("Want")) {
-        handleReceivedStatusMessage(map);
+        QMap<QString, QMap<QString, quint32> > _map;
+        QDataStream stream(&input, QIODevice::ReadOnly);
+        stream >> _map;
+        handleReceivedStatusMessage(_map, senderPort);
     }
 }
 
-void ChatDialog::handleReceivedMessage(QVariantMap map)
+void ChatDialog::handleReceivedMessage(QVariantMap map, quint16 senderPort)
 {
-        //CHECK SEQNO: IF EXPECTED, ADD TO MESSAGELIST AND STATUS MESSAGE LIST AND THEN SEND UPDATED STATUS MESSAGE LIST (has new seqno) also decide whether
-        //to send the message to another random peer
+        //CHECK SEQNO: IF EXPECTED, ADD TO MESSAGELIST AND STATUS MESSAGE LIST AND THEN SEND UPDATED STATUS MESSAGE LIST (has new seqno)
         //IF NOT EXPECTED, DISREGARD, and SEND OLD STATUS MESSAGE LIST
-        qDebug() << "Received Origin: " << map.value("Origin").toString();
         if(statusMessage.contains(map.value("Origin").toString()) ) {
+            if(statusMessage.value(map.value("Origin").toString()) != map.value("SeqNo").toUInt()) {
+                //IF SEQNO IS NOT THE ONE EXPECTED DISCARD AND SEND OLD STATUS MESSAGE MAP AND EXIT
+                textview->append("GTFO");
+                sendStatusMessage(senderPort);
+                return;
+            }
             qDebug() << "Existing Peer";
-
         }
         else {
-            textview->append("ARE WE HERE?");
-            statusMessage.insert(map.value("Origin").toString(),map.value("SeqNo").toUInt());
+            if(map.value("SeqNo").toInt() != 0) {
+                statusMessage.insert(map.value("Origin").toString(),0);
+                textview->append("ARE WE HERE?");
+                sendStatusMessage(senderPort);
+                return;
+            }
         }
 
-        textview->append("Incoming Message from: " + map.value("Origin").toString());
-        textview->append("Message is: " + map.value("ChatText").toString());
-        textview->append("Sequence Number is: " + map.value("SeqNo").toString());
-
-        //
-
+        //UPDATE STATUS MESSAGE MAP
+        statusMessage.insert(map.value("Origin").toString(),map.value("SeqNo").toUInt()+1);
+        qDebug() << "Did we get here? : " << statusMessage.value(map.value("Origin").toString()) << endl;
+        //UPDATE MESSAGE LIST
+        QList<QString> currentMessageList;
+        if(allMessages.contains(map.value("Origin").toString())) {
+            currentMessageList = allMessages.value(map.value("Origin").toString());
+        }
+        currentMessageList.append(map.value("ChatText").toString());
+        allMessages.insert(map.value("Origin").toString(), currentMessageList);
+        sendStatusMessage(senderPort);
+        textview->append("\[" + map.value("Origin").toString() + "]: " + map.value("ChatText").toString());
 }
 
-void ChatDialog::handleReceivedStatusMessage()
+void ChatDialog::handleReceivedStatusMessage(QMap<QString, QMap<QString, quint32> > _map, quint16 senderPort)
 {
 
-    //DESERIALIZE STATUS MESSAGE AND DECIDE WHETHER YOU NEED TO SEND, OR RECEIVE, OR FLIP (DIE)
+    //COMPARE STATUS MESSAGES AND DECIDE WHETHER YOU NEED TO SEND, OR RECEIVE, OR FLIP (DIE)
+    QString lessRemote = NULL;
+    QString moreRemote = NULL;
+    QString missingRemote = NULL;
+
+    QMap<QString, quint32> peerStatusMap = _map.value("Want");
+
+    QMap<QString, quint32>:: iterator i = peerStatusMap.begin();
+
+    while(i != peerStatusMap.end()) {
+        if(statusMessage.contains(i.key())){
+            if(i.value() < statusMessage.value(i.key())) {
+                lessRemote = i.key();
+                break;
+            }
+        }
+        else if(i.value() > statusMessage.value(i.key())) {
+            moreRemote = i.key();
+        }
+        ++i;
+    }
+
+    QMap<QString, quint32>:: iterator j = statusMessage.begin();
+    while(j != statusMessage.constEnd()) {
+        qDebug() << "JKEY: " << j.key();
+        if(!peerStatusMap.contains(j.key())){
+            missingRemote = j.key();
+            break;
+        }
+        ++j;
+    }
+
+    timeout->stop();
+
+    if(!lessRemote.isNull()) {
+        qDebug() << "LR: " << lessRemote;
+        quint32 index = peerStatusMap.value(lessRemote);
+        QByteArray lrArray = serializeMissingMessage(allMessages.value(lessRemote).at(index), index, lessRemote);
+        sock->writeDatagram(lrArray, lrArray.size(), QHostAddress::LocalHost, senderPort);
+    }
+
+    else if(!missingRemote.isNull()) {
+        QByteArray mrArray = serializeMissingMessage(allMessages.value(missingRemote).at(0), 0, missingRemote);
+        sock->writeDatagram(mrArray, mrArray.size(), QHostAddress::LocalHost, senderPort);
+    }
+
+    else if(!moreRemote.isNull()) {
+        sendStatusMessage(senderPort);
+    }
+    else {
+        qsrand(time(0));
+        if(1+(rand() %2) == 1) {
+           sendStatusMessage(choosePeer());
+        }
+        else {
+            return;
+        }
+    }
+}
+
+QByteArray ChatDialog::serializeMissingMessage(QString input, quint32 seqNumber, QString origin)
+{
+    QVariantMap message;
+    message.insert("ChatText", input);
+    //TODO: Add Origin and SeqNo
+    message.insert("Origin", origin);
+    message.insert("SeqNo", seqNumber);
+
+    QByteArray missingMessageArray;
+    QDataStream messageStream(&missingMessageArray,QIODevice::ReadWrite);
+    messageStream << message;
+    return missingMessageArray;
 }
 
 void ChatDialog::gotReturnPressed()
@@ -227,18 +298,21 @@ void ChatDialog::gotReturnPressed()
 	// Insert some networking code here...
 	QString message = textline ->text();
     //qDebug() << "FIX: send message to other peers: " << message;
-    //textview->append(textline->text());
+    textview->append("\[You]: " + textline->text());
 	//TODO: Add sent message to our own list of messages statuses
-	if(statusMessage.contains(sock->randomID)) {
-        	statusMessage[sock->randomID] += 1;
-    	}
-    	else {
-        	statusMessage.insert(sock->randomID, 1);
-	}
-
-	//Construct our message and add to list of all messages
-	currentMessageList.append(message);
-        allMessages.insert(sock->randomID, currentMessageList);
+    if(statusMessage.contains(sock->randomID)) {
+            statusMessage[sock->randomID] += 1;
+    }
+    else {
+            statusMessage.insert(sock->randomID, 1);
+    }
+    //Construct our message and add to list of all messages
+    QList<QString> currentMessageList;
+    if(allMessages.contains(sock->randomID)) {
+        currentMessageList = allMessages.value(sock->randomID);
+    }
+    currentMessageList.append(message);
+    allMessages.insert(sock->randomID, currentMessageList);
 
 	sendMessage(message);
 	// Clear the textline to get ready for the next input message.
