@@ -51,6 +51,8 @@ public:
     QByteArray lastAttemptedMessage;
     int lastAttemptedPeer;
     QByteArray serializeMissingMessage(QString input, quint32 seqNumber, QString origin);
+    void rumorMonger();
+    QByteArray lastReceivedMessage;
 
 	
 

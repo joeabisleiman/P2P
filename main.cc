@@ -37,6 +37,11 @@ ChatDialog::ChatDialog()
 	layout->addWidget(textline);
 	setLayout(layout);
 	seqNo = 0;
+    //Initialize status map
+    statusMessage.insert("36768",0);
+    statusMessage.insert("36769",0);
+    statusMessage.insert("36770",0);
+    statusMessage.insert("36771",0);
 	// Register a callback on the textline's returnPressed signal
 	// so that we can send the message entered by the user.
 	connect(textline, SIGNAL(returnPressed()),
@@ -86,8 +91,13 @@ void ChatDialog::reSendMessage()
     sock->writeDatagram(lastAttemptedMessage, lastAttemptedMessage.size(), QHostAddress::LocalHost, lastAttemptedPeer);
 
     //TODO: ADD TIMEOUT
-    qDebug() <<  "ARE YOU RESENDING YOU FUCKER????";
     timeout->start(2000);
+}
+
+void ChatDialog::rumorMonger()
+{
+    sock->writeDatagram(lastReceivedMessage, lastReceivedMessage.size(), QHostAddress::LocalHost, choosePeer());
+
 }
 
 void ChatDialog::anti_entropy()
@@ -151,7 +161,7 @@ void ChatDialog::readMessage()
         // when data comes in
                 QByteArray message;
             message.resize(sock->pendingDatagramSize());
-
+        lastReceivedMessage = message;
         QHostAddress sender;
             quint16 senderPort;
 
@@ -167,6 +177,7 @@ void ChatDialog::deserializeMessage(QByteArray input, quint16 senderPort)
     QVariantMap map;
 	QDataStream deserializer(&input, QIODevice::ReadOnly);
     deserializer >> map;
+
 
     if (map.contains("ChatText")){
         handleReceivedMessage(map, senderPort);
@@ -186,7 +197,6 @@ void ChatDialog::handleReceivedMessage(QVariantMap map, quint16 senderPort)
         if(statusMessage.contains(map.value("Origin").toString()) ) {
             if(statusMessage.value(map.value("Origin").toString()) != map.value("SeqNo").toUInt()) {
                 //IF SEQNO IS NOT THE ONE EXPECTED DISCARD AND SEND OLD STATUS MESSAGE MAP AND EXIT
-                textview->append("GTFO");
                 sendStatusMessage(senderPort);
                 return;
             }
@@ -195,7 +205,6 @@ void ChatDialog::handleReceivedMessage(QVariantMap map, quint16 senderPort)
         else {
             if(map.value("SeqNo").toInt() != 0) {
                 statusMessage.insert(map.value("Origin").toString(),0);
-                textview->append("ARE WE HERE?");
                 sendStatusMessage(senderPort);
                 return;
             }
@@ -203,7 +212,6 @@ void ChatDialog::handleReceivedMessage(QVariantMap map, quint16 senderPort)
 
         //UPDATE STATUS MESSAGE MAP
         statusMessage.insert(map.value("Origin").toString(),map.value("SeqNo").toUInt()+1);
-        qDebug() << "Did we get here? : " << statusMessage.value(map.value("Origin").toString()) << endl;
         //UPDATE MESSAGE LIST
         QList<QString> currentMessageList;
         if(allMessages.contains(map.value("Origin").toString())) {
@@ -213,6 +221,7 @@ void ChatDialog::handleReceivedMessage(QVariantMap map, quint16 senderPort)
         allMessages.insert(map.value("Origin").toString(), currentMessageList);
         sendStatusMessage(senderPort);
         textview->append("\[" + map.value("Origin").toString() + "]: " + map.value("ChatText").toString());
+        rumorMonger();
 }
 
 void ChatDialog::handleReceivedStatusMessage(QMap<QString, QMap<QString, quint32> > _map, quint16 senderPort)
@@ -340,7 +349,8 @@ bool NetSocket::bind()
 			qDebug() << "bound to UDP port " << p;
 			assignedPort = p;
 			qsrand(time(0));
-			randomID = QString::number(p) + QString::number(qrand());
+            //randomID = QString::number(p) + QString::number(qrand());
+            randomID = QString::number(p);
 			qDebug() << "Your ID is:  " << randomID;
 			return true;
 		}
